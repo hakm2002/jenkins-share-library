@@ -22,35 +22,47 @@ def call(Map config = [:]) {
             SCANNER_HOME = tool 'sonar' 
         }
 
-        stages {
-            // Stage 1: Analisis Code & Unit Test
+        
             stage('SonarQube Analysis') {
                 steps {
-                    // Masuk ke folder project (misal: To-do-list)
                     dir(projectDir) {
                         script {
                             echo "Running logic inside: ${projectDir}"
                             
-                            // A. Generate Coverage
+                            // 1. Generate Coverage (Wajib agar coverage % muncul di Sonar)
                             try {
                                 echo "Running Go Test & Coverage..."
                                 sh 'go mod tidy'
+                                // Output coverage disimpan ke 'coverage.out'
                                 sh 'go test ./... -coverprofile=coverage.out'
                             } catch (Exception e) {
                                 echo 'Warning: Unit test failed, but continuing scan...'
                             }
 
-                            // B. Sonar Scanner
+                            // 2. Definisi Parameter Sonar
+                            // Kita pakai appName sebagai projectKey agar otomatis
+                            def scannerParams = [
+                                "-Dsonar.projectKey=${appName}",
+                                "-Dsonar.projectName=${appName}",
+                                "-Dsonar.sources=.",
+                                "-Dsonar.exclusions=**/*_test.go,**/vendor/**",
+                                "-Dsonar.go.coverage.reportPaths=coverage.out",
+                                "-Dsonar.language=go"
+                            ].join(' ')
+
+                            // 3. Jalankan Scanner
                             withCredentials([string(credentialsId: sonarCredId, variable: 'SONAR_TOKEN')]) {
-                                withSonarQubeEnv('SonarQube') { // Pastikan nama Server di Config System sesuai
-                                    sh "${env.SCANNER_HOME}/bin/sonar-scanner -Dsonar.token=\${SONAR_TOKEN}"
+                                // Pastikan nama 'SonarQube' sesuai dengan nama Server di:
+                                // Manage Jenkins > System > SonarQube servers
+                                withSonarQubeEnv('SonarQube') { 
+                                    sh "${env.SCANNER_HOME}/bin/sonar-scanner ${scannerParams} -Dsonar.token=\${SONAR_TOKEN}"
                                 }
                             }
                         }
                     }
                 }
             }
-
+            
             // Stage 2: Build Docker Image
             stage('Build Docker Image') {
                 steps {
