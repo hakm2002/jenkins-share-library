@@ -1,46 +1,52 @@
 def call(Map config = [:]) {
-    // --- 1. CONFIGURATION & DEFAULTS ---
-    // Mengambil parameter dari Jenkinsfile, atau pakai default jika kosong
-    def appName = config.appName ?: env.JOB_BASE_NAME
-    def projectDir = config.projectDir ?: '.' // Folder sub-direktori (misal: 'To-do-list')
-    def dockerRegistryUser = config.dockerUser ?: 'hakm2002'
-    def dockerImage = "${dockerRegistryUser}/${appName}"
+    // Definisikan variabel default jika user lupa isi
+    def appName = config.appName ?: 'my-go-app'
+    def projectDir = config.projectDir ?: '.' 
     def deployPort = config.deployPort ?: '8080'
-    
-    // Credential IDs (sesuaikan dengan yang ada di Jenkins)
-    def dockerCredId = config.dockerCredId ?: 'docker-hub'
-    def sonarCredId = config.sonarCredId ?: 'go-token'
-    
-    // Environment Variables untuk container saat deploy (Map)
-    def appEnvVars = config.appEnvVars ?: [:] 
+    def sonarCredId = config.sonarCredId ?: 'sonar-token' // Pastikan ID ini ada di Credentials Jenkins
+    def dockerRegistry = config.dockerRegistry ?: 'docker.io' // Optional
+    def imageTag = "latest"
 
     pipeline {
         agent any
 
         environment {
-            // Setup Scanner Home (Pastikan nama 'sonar' sesuai Global Tool Config)
-            SCANNER_HOME = tool 'sonar' 
+            // Environment variable global
+            GO111MODULE = 'on'
+            CGO_ENABLED = '0'
+            PATH = "/usr/local/go/bin:${env.PATH}"
+            // Sesuaikan nama credential ID Dockerhub Anda di Jenkins
+            DOCKER_CREDENTIAL_ID = 'dockerhub-id-hakm' 
         }
 
-        
+        stages {
+            stage('Checkout Scm') {
+                steps {
+                    // Checkout code dari repo aplikasi
+                    checkout scm
+                }
+            }
+
+            stage('Unit Test & Coverage') {
+                steps {
+                    dir(projectDir) {
+                        script {
+                            echo "Running Unit Tests in ${projectDir}..."
+                            sh 'go mod tidy'
+                            // Output coverage ke coverage.out agar dibaca Sonar
+                            sh 'go test ./... -coverprofile=coverage.out'
+                        }
+                    }
+                }
+            }
+
             stage('SonarQube Analysis') {
                 steps {
                     dir(projectDir) {
                         script {
-                            echo "Running logic inside: ${projectDir}"
+                            echo "Starting SonarQube Analysis..."
                             
-                            // 1. Generate Coverage (Wajib agar coverage % muncul di Sonar)
-                            try {
-                                echo "Running Go Test & Coverage..."
-                                sh 'go mod tidy'
-                                // Output coverage disimpan ke 'coverage.out'
-                                sh 'go test ./... -coverprofile=coverage.out'
-                            } catch (Exception e) {
-                                echo 'Warning: Unit test failed, but continuing scan...'
-                            }
-
-                            // 2. Definisi Parameter Sonar
-                            // Kita pakai appName sebagai projectKey agar otomatis
+                            // Definisi Parameter SonarScanner
                             def scannerParams = [
                                 "-Dsonar.projectKey=${appName}",
                                 "-Dsonar.projectName=${appName}",
@@ -50,76 +56,75 @@ def call(Map config = [:]) {
                                 "-Dsonar.language=go"
                             ].join(' ')
 
-                            // 3. Jalankan Scanner
-                            withCredentials([string(credentialsId: sonarCredId, variable: 'SONAR_TOKEN')]) {
-                                // Pastikan nama 'SonarQube' sesuai dengan nama Server di:
-                                // Manage Jenkins > System > SonarQube servers
-                                withSonarQubeEnv('SonarQube') { 
-                                    sh "${env.SCANNER_HOME}/bin/sonar-scanner ${scannerParams} -Dsonar.token=\${SONAR_TOKEN}"
-                                }
+                            // Panggil Sonar Scanner
+                            // Pastikan nama 'SonarQube' sesuai settingan di Manage Jenkins > System
+                            withSonarQubeEnv('SonarQube') { 
+                                sh "${env.SCANNER_HOME}/bin/sonar-scanner ${scannerParams}"
                             }
                         }
                     }
                 }
             }
-            
-            // Stage 2: Build Docker Image
+
+            stage('Quality Gate') {
+                steps {
+                    // Menunggu hasil dari SonarQube (Pass/Fail)
+                    // Timeout 5 menit agar tidak hang selamanya
+                    timeout(time: 5, unit: 'MINUTES') {
+                        waitForQualityGate abortPipeline: true
+                    }
+                }
+            }
+
             stage('Build Docker Image') {
                 steps {
                     dir(projectDir) {
                         script {
-                            echo "Building Docker Image: ${dockerImage}"
-                            sh "docker build -t ${dockerImage}:latest ."
+                            echo "Building Docker Image: ${appName}:${imageTag}"
+                            // Pastikan user jenkins punya akses docker, atau gunakan sudo jika perlu
+                            sh "docker build -t ${dockerRegistry}/${appName}:${imageTag} ."
                         }
                     }
                 }
             }
 
-            // Stage 3: Push ke Registry
-            stage('Push to Docker Hub') {
+            stage('Push to Registry') {
                 steps {
-                    withCredentials([usernamePassword(credentialsId: dockerCredId, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                        sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                        sh "docker push ${dockerImage}:latest"
+                    script {
+                        echo "Pushing Image to Registry..."
+                        // Login & Push menggunakan kredensial Jenkins
+                        withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIAL_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
+                            sh "docker push ${dockerRegistry}/${appName}:${imageTag}"
+                        }
                     }
                 }
             }
 
-            // Stage 4: Deploy (Simple Docker Run)
-            // Catatan: Ini akan deploy di server Jenkins/Agent itu sendiri
+            // Uncomment stage ini jika ingin deploy via SSH
+            /*
             stage('Deploy to Server') {
                 steps {
                     script {
-                        def containerName = "${appName}"
-                        
-                        // Konversi Map environment variables menjadi string "-e KEY=VALUE"
-                        def envString = appEnvVars.collect { k, v -> "-e ${k}=${v}" }.join(' ')
-
-                        echo "Deploying container: ${containerName} on port ${deployPort}"
-                        
-                        // Cleanup container lama
-                        sh "docker network create devops-network || true"
-                        sh "docker stop ${containerName} || true"
-                        sh "docker rm ${containerName} || true"
-
-                        // Run container baru
-                        sh """
-                        docker run -d \
-                        --name ${containerName} \
-                        --network devops-network \
-                        -p ${deployPort}:8080 \
-                        ${envString} \
-                        ${dockerImage}:latest
-                        """
+                        echo "Deploying container..."
+                        // Tambahkan logic deploy SSH atau Docker Run disini
+                        // sh "docker run -d -p ${deployPort}:${deployPort} --name ${appName} ${dockerRegistry}/${appName}:${imageTag}"
                     }
                 }
             }
+            */
         }
-
+        
         post {
-            always { 
-                sh "docker logout || true" 
-                cleanWs()
+            always {
+                echo 'Pipeline finished.'
+                cleanWs() // Bersihkan workspace agar hemat disk
+            }
+            success {
+                echo 'Build Success!'
+            }
+            failure {
+                echo 'Build Failed :('
             }
         }
     }
