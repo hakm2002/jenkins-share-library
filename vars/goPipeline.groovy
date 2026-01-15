@@ -1,10 +1,15 @@
 def call(Map config = [:]) {
     def appName = config.appName ?: 'my-go-app'
     def projectDir = config.projectDir ?: '.' 
-    def deployPort = config.deployPort ?: '8080'
     def sonarCredId = config.sonarCredId ?: 'sonar-token'
     def dockerRegistry = config.dockerRegistry ?: 'docker.io'
     def imageTag = "latest"
+    
+    // === TAMBAHAN BARU ===
+    // Masukkan username DockerHub Anda disini agar otomatis tertulis di image tag
+    def dockerUser = config.dockerUser ?: 'hakm2002' 
+    // Nama Image menjadi: hakm2002/todolist-app
+    def fullImageName = "${dockerUser}/${appName}" 
 
     pipeline {
         agent any
@@ -27,9 +32,8 @@ def call(Map config = [:]) {
                 steps {
                     dir(projectDir) {
                         script {
-                            echo "Running Unit Tests in ${projectDir}..."
+                            echo "Running Unit Tests..."
                             sh 'go mod tidy'
-                            // Unit test jalan, walau coverage 0% tidak masalah untuk testing pipeline
                             sh 'go test ./... -coverprofile=coverage.out'
                         }
                     }
@@ -41,9 +45,6 @@ def call(Map config = [:]) {
                     dir(projectDir) {
                         script {
                             echo "Starting SonarQube Analysis..."
-                            
-                            // === PERBAIKAN DISINI ===
-                            // Mengambil path tool yang bernama 'sonar-scanner' dari Jenkins Tools
                             def scannerHome = tool 'sonar-scanner'
                             
                             def scannerParams = [
@@ -55,7 +56,6 @@ def call(Map config = [:]) {
                                 "-Dsonar.language=go"
                             ].join(' ')
 
-                            // Menggunakan variabel scannerHome yang sudah didefinisikan
                             withSonarQubeEnv('SonarQube') { 
                                 sh "${scannerHome}/bin/sonar-scanner ${scannerParams}"
                             }
@@ -76,8 +76,9 @@ def call(Map config = [:]) {
                 steps {
                     dir(projectDir) {
                         script {
-                            echo "Building Docker Image: ${appName}:${imageTag}"
-                            sh "docker build -t ${dockerRegistry}/${appName}:${imageTag} ."
+                            // Sekarang nama image ada usernamenya: hakm2002/todolist-app:latest
+                            echo "Building Docker Image: ${fullImageName}:${imageTag}"
+                            sh "docker build -t ${dockerRegistry}/${fullImageName}:${imageTag} ."
                         }
                     }
                 }
@@ -88,8 +89,10 @@ def call(Map config = [:]) {
                     script {
                         echo "Pushing Image to Registry..."
                         withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIAL_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                            // Login
                             sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
-                            sh "docker push ${dockerRegistry}/${appName}:${imageTag}"
+                            // Push
+                            sh "docker push ${dockerRegistry}/${fullImageName}:${imageTag}"
                         }
                     }
                 }
