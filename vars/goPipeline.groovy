@@ -1,3 +1,4 @@
+// vars/goPipeline.groovy
 def call(Map config = [:]) {
     def appName = config.appName ?: 'my-go-app'
     def projectDir = config.projectDir ?: '.' 
@@ -5,10 +6,8 @@ def call(Map config = [:]) {
     def dockerRegistry = config.dockerRegistry ?: 'docker.io'
     def imageTag = "latest"
     
-    // === TAMBAHAN BARU ===
-    // Masukkan username DockerHub Anda disini agar otomatis tertulis di image tag
+    // Setup Docker User & Image Name
     def dockerUser = config.dockerUser ?: 'hakm2002' 
-    // Nama Image menjadi: hakm2002/todolist-app
     def fullImageName = "${dockerUser}/${appName}" 
 
     pipeline {
@@ -34,32 +33,29 @@ def call(Map config = [:]) {
                         script {
                             echo "Running Unit Tests..."
                             sh 'go mod tidy'
+                            // Output coverage.out akan muncul di dalam folder projectDir
                             sh 'go test ./... -coverprofile=coverage.out'
                         }
                     }
                 }
             }
-            // vars/goPipeline.groovy
 
-stage('SonarQube Analysis') {
-    steps {
-        dir(projectDir) {
-            script {
-                echo "Starting SonarQube Analysis..."
-                def scannerHome = tool 'sonar-scanner'
-                
-                // HAPUS parameter projectKey, projectName, sources, dan exclusions
-                // Biarkan sonar-project.properties yang menangani itu.
-                // Kita hanya perlu pass parameter dinamis yang mungkin tidak ada di file properties (opsional)
-                
-                withSonarQubeEnv('SonarQube') { 
-                    // Cukup panggil scanner saja, dia otomatis baca sonar-project.properties
-                    sh "${scannerHome}/bin/sonar-scanner"
+            stage('SonarQube Analysis') {
+                steps {
+                    dir(projectDir) {
+                        script {
+                            echo "Starting SonarQube Analysis..."
+                            def scannerHome = tool 'sonar-scanner'
+                            
+                            // Scanner akan otomatis mencari sonar-project.properties
+                            // di dalam folder saat ini (projectDir)
+                            withSonarQubeEnv('SonarQube') { 
+                                sh "${scannerHome}/bin/sonar-scanner"
+                            }
+                        }
+                    }
                 }
             }
-        }
-    }
-}
 
             stage('Quality Gate') {
                 steps {
@@ -73,8 +69,8 @@ stage('SonarQube Analysis') {
                 steps {
                     dir(projectDir) {
                         script {
-                            // Sekarang nama image ada usernamenya: hakm2002/todolist-app:latest
                             echo "Building Docker Image: ${fullImageName}:${imageTag}"
+                            // Pastikan Dockerfile ada di dalam projectDir
                             sh "docker build -t ${dockerRegistry}/${fullImageName}:${imageTag} ."
                         }
                     }
@@ -86,9 +82,7 @@ stage('SonarQube Analysis') {
                     script {
                         echo "Pushing Image to Registry..."
                         withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIAL_ID, usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
-                            // Login
                             sh "echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin"
-                            // Push
                             sh "docker push ${dockerRegistry}/${fullImageName}:${imageTag}"
                         }
                     }
