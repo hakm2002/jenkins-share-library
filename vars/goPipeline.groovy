@@ -39,30 +39,27 @@ def call(Map config = [:]) {
                     }
                 }
             }
+            // vars/goPipeline.groovy
 
-            stage('SonarQube Analysis') {
-                steps {
-                    dir(projectDir) {
-                        script {
-                            echo "Starting SonarQube Analysis..."
-                            def scannerHome = tool 'sonar-scanner'
-                            
-                            def scannerParams = [
-                                "-Dsonar.projectKey=${appName}",
-                                "-Dsonar.projectName=${appName}",
-                                "-Dsonar.sources=.",
-                                "-Dsonar.exclusions=**/*_test.go,**/vendor/**",
-                                "-Dsonar.go.coverage.reportPaths=coverage.out",
-                                "-Dsonar.language=go"
-                            ].join(' ')
-
-                            withSonarQubeEnv('SonarQube') { 
-                                sh "${scannerHome}/bin/sonar-scanner ${scannerParams}"
-                            }
-                        }
-                    }
+stage('SonarQube Analysis') {
+    steps {
+        dir(projectDir) {
+            script {
+                echo "Starting SonarQube Analysis..."
+                def scannerHome = tool 'sonar-scanner'
+                
+                // HAPUS parameter projectKey, projectName, sources, dan exclusions
+                // Biarkan sonar-project.properties yang menangani itu.
+                // Kita hanya perlu pass parameter dinamis yang mungkin tidak ada di file properties (opsional)
+                
+                withSonarQubeEnv('SonarQube') { 
+                    // Cukup panggil scanner saja, dia otomatis baca sonar-project.properties
+                    sh "${scannerHome}/bin/sonar-scanner"
                 }
             }
+        }
+    }
+}
 
             stage('Quality Gate') {
                 steps {
