@@ -13,6 +13,10 @@ def call(Map config = [:]) {
     pipeline {
         agent any
 
+        tools {
+            go 'Go-1.25.6' 
+        }
+
         environment {
             GO111MODULE = 'on'
             CGO_ENABLED = '0'
