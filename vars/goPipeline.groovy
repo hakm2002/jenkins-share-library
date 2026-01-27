@@ -14,7 +14,7 @@ def call(Map config = [:]) {
         agent any
 
         tools {
-            go 'Go-1.25.6' 
+            go 'Go-version'
         }
 
         environment {
